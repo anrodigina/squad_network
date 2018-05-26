@@ -1,183 +1,235 @@
-
-import copy
-
-
-class Tokens(object):
-    """A class to represent a list of tokenized text."""
-    TEXT = 0
-    TEXT_WS = 1
-    SPAN = 2
-    POS = 3
-    LEMMA = 4
-    NER = 5
-
-    def __init__(self, data, annotators, opts=None):
-        self.data = data
-        self.annotators = annotators
-        self.opts = opts or {}
-
-    def __len__(self):
-        """The number of tokens."""
-        return len(self.data)
-
-    def slice(self, i=None, j=None):
-        """Return a view of the list of tokens from [i, j)."""
-        new_tokens = copy.copy(self)
-        new_tokens.data = self.data[i: j]
-        return new_tokens
-
-    def untokenize(self):
-        """Returns the original text (with whitespace reinserted)."""
-        return ''.join([t[self.TEXT_WS] for t in self.data]).strip()
-
-    def words(self, uncased=False):
-        """Returns a list of the text of each token
-        Args:
-            uncased: lower cases text
-        """
-        if uncased:
-            return [t[self.TEXT].lower() for t in self.data]
-        else:
-            return [t[self.TEXT] for t in self.data]
-
-    def offsets(self):
-        """Returns a list of [start, end) character offsets of each token."""
-        return [t[self.SPAN] for t in self.data]
-
-    def pos(self):
-        """Returns a list of part-of-speech tags of each token.
-        Returns None if this annotation was not included.
-        """
-        if 'pos' not in self.annotators:
-            return None
-        return [t[self.POS] for t in self.data]
-
-    def lemmas(self):
-        """Returns a list of the lemmatized text of each token.
-        Returns None if this annotation was not included.
-        """
-        if 'lemma' not in self.annotators:
-            return None
-        return [t[self.LEMMA] for t in self.data]
-
-    def entities(self):
-        """Returns a list of named-entity-recognition tags of each token.
-        Returns None if this annotation was not included.
-        """
-        if 'ner' not in self.annotators:
-            return None
-        return [t[self.NER] for t in self.data]
-
-    def ngrams(self, n=1, uncased=False, filter_fn=None, as_strings=True):
-        """Returns a list of all ngrams from length 1 to n.
-        Args:
-            n: upper limit of ngram length
-            uncased: lower cases text
-            filter_fn: user function that takes in an ngram list and returns
-              True or False to keep or not keep the ngram
-            as_string: return the ngram as a string vs list
-        """
-        def _skip(gram):
-            if not filter_fn:
-                return False
-            return filter_fn(gram)
-
-        words = self.words(uncased)
-        ngrams = [(s, e + 1)
-                  for s in range(len(words))
-                  for e in range(s, min(s + n, len(words)))
-                  if not _skip(words[s:e + 1])]
-
-        # Concatenate into strings
-        if as_strings:
-            ngrams = ['{}'.format(' '.join(words[s:e])) for (s, e) in ngrams]
-
-        return ngrams
-
-    def entity_groups(self):
-        """Group consecutive entity tokens with the same NER tag."""
-        entities = self.entities()
-        if not entities:
-            return None
-        non_ent = self.opts.get('non_ent', 'O')
-        groups = []
-        idx = 0
-        while idx < len(entities):
-            ner_tag = entities[idx]
-            # Check for entity tag
-            if ner_tag != non_ent:
-                # Chomp the sequence
-                start = idx
-                while (idx < len(entities) and entities[idx] == ner_tag):
-                    idx += 1
-                groups.append((self.slice(start, idx).untokenize(), ner_tag))
-            else:
-                idx += 1
-        return groups
-
-
-class Tokenizer(object):
-    """Base tokenizer class.
-    Tokenizers implement tokenize, which should return a Tokens class.
-    """
-    def tokenize(self, text):
-        raise NotImplementedError
-
-    def shutdown(self):
-        pass
-
-    def __del__(self):
-        self.shutdown()
+import argparse
+import collections
+import multiprocessing
 
 import spacy
-import copy
-from .tokenizer import Tokens, Tokenizer
+
+global nlp
+nlp = spacy.load('en', parser=False)
+
+import tensorflow as tf
+import numpy as np
+import msgpack
+
+import re
+import unicodedata
+
+embedding = np.load('./data/embedding.npy')
+
+import msgpack
+with open('./data/meta.msgpack', 'rb') as f:
+  vocab = msgpack.load(f, encoding='utf8')
+
+w2id = {w: i for i, w in enumerate(vocab['vocab'])}
+tag2id = {w: i for i, w in enumerate(vocab['vocab_tag'])}
+ent2id = {w: i for i, w in enumerate(vocab['vocab_ent'])}
+
+def clean_spaces(text):
+    """normalize spaces in a string."""
+    text = re.sub(r'\s', ' ', text)
+    return text
 
 
-class SpacyTokenizer(Tokenizer):
+def normalize_text(text):
+    return unicodedata.normalize('NFD', text)
 
-    def __init__(self, **kwargs):
-        """
-        Args:
-            annotators: set that can include pos, lemma, and ner.
-            model: spaCy model to use (either path, or keyword like 'en').
-        """
-        model = kwargs.get('model', 'en')
-        self.annotators = copy.deepcopy(kwargs.get('annotators', set()))
-        nlp_kwargs = {'parser': False}
-        if not any([p in self.annotators for p in ['lemma', 'pos', 'ner']]):
-            nlp_kwargs['tagger'] = False
-        if 'ner' not in self.annotators:
-            nlp_kwargs['entity'] = False
-        self.nlp = spacy.load(model, **nlp_kwargs)
+def annotate(row, wv_cased):
+    global nlp
+    id_, context, question = row[:3]
+    q_doc = nlp(clean_spaces(question))
+    c_doc = nlp(clean_spaces(context))
+    question_tokens = [normalize_text(w.text) for w in q_doc]
+    context_tokens = [normalize_text(w.text) for w in c_doc]
+    question_tokens_lower = [w.lower() for w in question_tokens]
+    context_tokens_lower = [w.lower() for w in context_tokens]
+    context_token_span = [(w.idx, w.idx + len(w.text)) for w in c_doc]
+    context_tags = [w.tag_ for w in c_doc]
+    context_ents = [w.ent_type_ for w in c_doc]
+    question_lemma = {w.lemma_ if w.lemma_ != '-PRON-' else w.text.lower() for w in q_doc}
+    question_tokens_set = set(question_tokens)
+    question_tokens_lower_set = set(question_tokens_lower)
+    match_origin = [w in question_tokens_set for w in context_tokens]
+    match_lower = [w in question_tokens_lower_set for w in context_tokens_lower]
+    match_lemma = [(w.lemma_ if w.lemma_ != '-PRON-' else w.text.lower()) in question_lemma for w in c_doc]
+    # term frequency in document
+    counter_ = collections.Counter(context_tokens_lower)
+    total = len(context_tokens_lower)
+    context_tf = [counter_[w] / total for w in context_tokens_lower]
+    context_features = list(zip(match_origin, match_lower, match_lemma, context_tf))
+    if not wv_cased:
+        context_tokens = context_tokens_lower
+        question_tokens = question_tokens_lower
+    return (id_, context_tokens, context_features, context_tags, context_ents,
+            question_tokens, context, context_token_span) + row[3:]
+  
+def to_id(row, w2id, tag2id, ent2id, unk_id=1):
+    context_tokens = row[1]
+    context_features = row[2]
+    context_tags = row[3]
+    context_ents = row[4]
+    question_tokens = row[5]
+    question_ids = [w2id[w] if w in w2id else unk_id for w in question_tokens]
+    context_ids = [w2id[w] if w in w2id else unk_id for w in context_tokens]
+    tag_ids = [tag2id[w] for w in context_tags]
+    ent_ids = [ent2id[w] for w in context_ents]
+    return (row[0], context_ids, context_features, tag_ids, ent_ids, question_ids) + row[6:]
 
-    def tokenize(self, text):
-        # We don't treat new lines as tokens.
-        clean_text = text.replace('\n', ' ')
-        tokens = self.nlp.tokenizer(clean_text)
-        if any([p in self.annotators for p in ['lemma', 'pos', 'ner']]):
-            self.nlp.tagger(tokens)
-        if 'ner' in self.annotators:
-            self.nlp.entity(tokens)
 
-        data = []
-        for i in range(len(tokens)):
-            # Get whitespace
-            start_ws = tokens[i].idx
-            if i + 1 < len(tokens):
-                end_ws = tokens[i + 1].idx
-            else:
-                end_ws = tokens[i].idx + len(tokens[i].text)
+import keras
+import numpy as np
+from keras.models import Model
+from keras.layers import Input, Dense, Flatten, LSTM, Bidirectional, Concatenate, Add, Reshape, Multiply, Dot
+from keras.layers import SimpleRNN, GRU, BatchNormalization, Activation, RepeatVector,Permute, TimeDistributed
+from keras.layers import multiply, average, BatchNormalization, Average
+from keras.layers.wrappers import TimeDistributed, Bidirectional
+from keras import backend as K
+from keras.layers import Lambda, Masking
 
-            data.append((
-                tokens[i].text,
-                text[start_ws: end_ws],
-                (tokens[i].idx, tokens[i].idx + len(tokens[i].text)),
-                tokens[i].tag_,
-                tokens[i].lemma_,
-                tokens[i].ent_type_,
-            ))
+from keras.activations import softmax
 
-        # Set special option for non-entity tag: '' vs 'O' in spaCy
-        return Tokens(data, self.annotators, opts={'non_ent': ''})
+txt_len = 767
+qst_len = 60
+vector_dim = 300
+
+
+hidden = 128
+
+input_qst = Input(shape=(qst_len, vector_dim), name='in_qst')
+input_txt = Input(shape=(txt_len, vector_dim), name='in_txt')
+input_features = Input(shape=(txt_len, 4), name='in_features')
+input_tags = Input(shape=(txt_len, 50), name='in_tags')
+input_ent = Input(shape=(txt_len, 19), name='in_ents')
+
+in_txt = Concatenate() ([input_txt, input_features, input_tags, input_ent])
+
+txt_1 = Bidirectional(LSTM(hidden,
+                return_sequences=True
+#               ,  return_state=True
+                ), name='txt1') (in_txt)
+
+txt_1_norm = BatchNormalization() (txt_1)
+
+txt_2 = Bidirectional(LSTM(hidden,
+                return_sequences=True,
+#                 return_state=True
+                ), name='txt2') (txt_1_norm)
+
+txt_2_norm = BatchNormalization() (txt_2)
+
+
+qst_1 =  Bidirectional(LSTM(hidden,
+                return_sequences=True
+                ), name='qst1') (input_qst)
+
+qst_1_norm = BatchNormalization() (qst_1)
+
+qst_2 = Bidirectional(LSTM(hidden,
+                return_sequences=True,
+                ), name='qst2') (qst_1_norm)
+qst_2_norm = BatchNormalization() (qst_2)
+
+txt_result = Concatenate(name='concat_txt') ([txt_1_norm, txt_2_norm]);
+
+
+attention = Dense(1, activation='tanh')(qst_2_norm)
+attention1 = Reshape((qst_len,))(attention)
+attention2 = Activation('softmax')(attention1)
+attention3 = RepeatVector(2 * hidden)(attention2) 
+attention4 = Permute([2, 1])(attention3)
+
+out_attent = Multiply(name='mul') ([qst_2_norm, attention]) #mmm
+
+
+tmp_sum = Lambda(lambda x: K.sum(x, axis=-2), name='tmp_sum') (out_attent)
+
+
+txt_a = Dense(hidden * 2, use_bias=False, activation='softmax', name='txt_a') (txt_result)
+txt_b = Dense(hidden * 2, use_bias=False, activation='softmax', name='txt_b') (txt_result)
+
+bb = Lambda(lambda x1: K.batch_dot(x1[0], x1[1])) ([txt_a, tmp_sum])
+ee = Lambda(lambda x1: K.batch_dot(x1[0], x1[1])) ([txt_b, tmp_sum])
+
+begin = Activation('softmax', name='ans_beg') (bb)
+end = Activation('softmax', name='ans_end') (ee)
+
+model = Model(inputs=[input_txt, input_qst, input_features, input_tags, input_ent], outputs=[begin, end])
+
+model.compile(
+    loss='categorical_crossentropy',
+    optimizer='RMSprop',
+    metrics=['accuracy']
+)
+
+model.load_weights('./models/last-v-4.h5')
+
+while True:
+    try:
+        while True:
+            context = input('Enter your context, please\n_________________________________________________\n')
+            print('_________________________________________________\n')
+            if context.strip():
+                break
+        while True:
+            question = input('Enter your question, please\n_________________________________________________\n')
+            print('_________________________________________________\n')
+            if question.strip():
+                break
+    except EOFError:
+        print('##############################')
+        break
+    annotated = annotate(('interact-{}'.format(1), context, question), vocab['wv_cased'])
+    model_in = to_id(annotated, w2id, tag2id, ent2id)
+    context_data = np.zeros((2, 767), dtype=int)
+    qst_data = np.zeros((2,60), dtype=int)
+
+    for i in range(len(model_in[1])):
+      context_data[0][i] = model_in[1][i]
+
+    for i in range(len(model_in[5])):
+      qst_data[0][i] = model_in[5][i]
+
+    cont_features = np.zeros((2, 767, 4), dtype=float)
+
+    for i in range(len(model_in[2])):
+      cont_features[0][i][0] = float(model_in[2][i][0])
+      cont_features[0][i][1] = float(model_in[2][i][1])
+      cont_features[0][i][2] = float(model_in[2][i][2])
+      cont_features[0][i][3] = model_in[2][i][3]  
+
+    con_tag = np.zeros((2, 767), dtype=int)
+    for i in range(len(model_in[1])):
+      con_tag[0][i] = model_in[3][i]
+
+    ent_tag = np.zeros((2, 767), dtype=int)
+    for i in range(len(model_in[1])):
+      ent_tag[0][i] = model_in[4][i]
+
+    voc_ent = np.zeros((19, 19), dtype=float)
+    for i in range(19):
+      voc_ent[i][i] = 1.
+    voc_con = np.zeros((50, 50), dtype=float)
+    for i in range(50):
+      voc_con[i][i] = 1.
+
+    x = model.predict(x={'in_qst':embedding[qst_data],
+                     'in_txt':embedding[context_data],
+                     'in_features':cont_features,
+                     'in_tags':voc_con[con_tag],
+                     'in_ents':voc_ent[ent_tag]
+                    })
+    beg = 0
+    end = 767
+
+    max_value = 0
+    for j in range(767):
+      for k in range(j, min(j+15, 767)):
+        value = x[0][1][j] * x[0][0][k]
+        if (value > max_value):
+          max_value = value
+          beg = j
+          end = k
+    txt = model_in[6].split()
+    for i in range(beg, end + 1):
+      print(txt[i], end=' ')
+    print('\n_________________________________________________\n')
 
