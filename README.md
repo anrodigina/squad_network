@@ -27,8 +27,12 @@
         GloVe
         FastText
 
-- final-lab (all instructions are in this directory)
+- final-lab:
+    To train a model run a script named train.py
+    To test a model run a script names test.py
+    To predict something use predict.py, all instructions are included
 
+    All additional data (warning it contains large files) you can find on my google drive https://drive.google.com/open?id=1ByXivFXI3dlh9NVhfFINGEATPFW8N1Ww
 
 
 
@@ -36,4 +40,3 @@
 _________________________________________________________
 
 
-All additional data (warning it contains large files) you can find on my google drive https://drive.google.com/open?id=1ByXivFXI3dlh9NVhfFINGEATPFW8N1Ww
