@@ -21,7 +21,11 @@
       Kaggle competition https://www.kaggle.com/c/ch-2017
 - lab-4:
 
-- lab-5:
+    ## Embeddings
+        Latent semantic analysis (LSA)
+        Word2vec
+        GloVe
+        FastText
 
 - final-lab (all instructions are in this directory)
 
