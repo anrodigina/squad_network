@@ -28,6 +28,7 @@
         FastText
 
 - final-lab:
+    ## SQuAD:
     To train a model run a script named train.py
     To test a model run a script names test.py
     To predict something use predict.py, all instructions are included
