@@ -64,8 +64,8 @@
     
     Firstly, you have to install Spacy lib:
     
-           # pip install -U spacy
-           # python -m spacy download en
+           pip install -U spacy
+           python -m spacy download en
     
     Just run this in terminal or visit the website https://spacy.io/usage/
     
