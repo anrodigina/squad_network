@@ -29,6 +29,39 @@
 
 - final-lab:
     ## SQuAD:
+        Tree for a working repo
+        .
+        ├── models
+        │   ├── last-v-1.h5
+        │   ├── last-v-2.h5
+        │   ├── last-v-3.h5
+        │   ├── last-v-4.h5
+        │   └── last-v-5.h5
+        ├── data
+        │   ├── context_data.npy
+        |   ├── qst_data.npy
+        |   ├── cont_features.npy
+        │   ├── ans_beg.npy
+        |   ├── ans_end.npy
+        |   ├── qst_data.npy
+        |   ├── con_tag.npy
+        |   ├── ent_tag.npy
+        │   ├── embedding.npy
+        |   ├── context_test.npy
+        |   ├── cont_features_test.npy
+        |   ├── con_test.npy
+        |   ├── ent_test.npy
+        |   ├── qst_test.npy
+        |   ├── embedding.npy
+        |   ├── test_begin.npy
+        |   ├── test_end.npy
+        |   ├── data.msgpack
+        |   └── meta.msgpack
+        ├── predict.py
+        ├── prepare.py
+        ├── test.py
+        └── train.py
+    
     To train a model run a script named train.py
     
     To test a model run a script names test.py
