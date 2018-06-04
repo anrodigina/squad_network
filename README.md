@@ -62,6 +62,12 @@
         ├── test.py
         └── train.py
     
+    Firstly, you have to install Spacy lib:
+            pip install -U spacy
+            python -m spacy download en
+    
+    Just run this in terminal or visit the website https://spacy.io/usage/
+    
     To train a model run a script named train.py
     
     To test a model run a script names test.py
