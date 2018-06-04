@@ -77,7 +77,7 @@
 
     All additional data for directory data (warning it contains large files) you can find on my google drive https://drive.google.com/open?id=1R5ANjuQv26QCczuANHKoYFbvzsp3xGGj
     
-    You have to move it in directory 'data':)
+    You have to move data from this archive into final_lab/data 
     
 
 
